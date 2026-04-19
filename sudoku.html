@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sudoku</title>
+    <meta name="description" content="Play sudoku in your browser. No tracking, no ads, no network requests. Works offline.">
+    <style>
+        /* ============================================================
+           Design tokens — CSS custom properties, light + dark via
+           prefers-color-scheme. All color decisions live in this block.
+           ============================================================ */
+        :root {
+            --bg: #fafaf9;
+            --surface: #ffffff;
+            --surface-soft: #f3f3f1;
+            --cell-bg: #ffffff;
+            --cell-related: #ececea;
+            --cell-same-value: #d9e8fa;
+            --cell-selected: #b8d5f2;
+            --cell-conflict: #fbe5e5;
+            --text: #1c1c1a;
+            --text-muted: #6b6b66;
+            --text-user: #1463b7;
+            --text-conflict: #a02929;
+            --border: rgba(0, 0, 0, 0.14);
+            --border-strong: rgba(0, 0, 0, 0.6);
+            --accent: #1463b7;
+            --danger: #a02929;
+            --success: #2d6e3a;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #17171a;
+                --surface: #1e1e22;
+                --surface-soft: #262629;
+                --cell-bg: #1e1e22;
+                --cell-related: #2a2a2f;
+                --cell-same-value: #1e3556;
+                --cell-selected: #2e5c90;
+                --cell-conflict: #4a2020;
+                --text: #e7e7e4;
+                --text-muted: #8d8d88;
+                --text-user: #6fa7e6;
+                --text-conflict: #e38a8a;
+                --border: rgba(255, 255, 255, 0.12);
+                --border-strong: rgba(255, 255, 255, 0.55);
+                --accent: #6fa7e6;
+                --danger: #e38a8a;
+                --success: #8ccb97;
+            }
+        }
+
+        /* ============================================================
+           Reset + base
+           ============================================================ */
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        body {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px;
+        }
+        main {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .sr-only {
+            position: absolute;
+            width: 1px; height: 1px;
+            padding: 0; margin: -1px;
+            overflow: hidden;
+            clip: rect(0,0,0,0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* ============================================================
+           Top bar — timer + difficulty
+           ============================================================ */
+        .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        .top .timer { font-variant-numeric: tabular-nums; font-size: 16px; }
+
+        select, button {
+            font: inherit;
+            color: inherit;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: background 120ms;
+        }
+        select:hover, button:hover { background: var(--surface-soft); }
+        button:active { transform: scale(0.98); }
+        button.primary {
+            background: var(--accent);
+            color: white;
+            border-color: transparent;
+        }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* ============================================================
+           Board — 9x9 CSS grid
+           ============================================================ */
+        .board {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            width: 100%;
+            aspect-ratio: 1;
+            border: 2px solid var(--border-strong);
+            border-radius: 4px;
+            background: var(--cell-bg);
+            user-select: none;
+            touch-action: manipulation;
+            outline: none;
+        }
+        .cell {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: clamp(18px, 5.5vw, 28px);
+            line-height: 1;
+            background: var(--cell-bg);
+            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 90ms;
+            color: var(--text);
+        }
+        /* Thicker 3x3 box borders */
+        .cell[data-col="2"], .cell[data-col="5"] { border-right: 1.5px solid var(--border-strong); }
+        .cell[data-col="8"] { border-right: none; }
+        .cell[data-row="2"], .cell[data-row="5"] { border-bottom: 1.5px solid var(--border-strong); }
+        .cell[data-row="8"] { border-bottom: none; }
+
+        .cell.clue { font-weight: 600; color: var(--text); }
+        .cell.user { color: var(--text-user); font-weight: 400; }
+        .cell.related { background: var(--cell-related); }
+        .cell.same-value { background: var(--cell-same-value); }
+        .cell.selected { background: var(--cell-selected); box-shadow: inset 0 0 0 2px var(--accent); }
+        .cell.conflict { background: var(--cell-conflict) !important; color: var(--text-conflict) !important; }
+
+        /* Pencil marks — 3x3 mini-grid inside a cell */
+        .pencils {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            width: 100%;
+            height: 100%;
+            font-size: clamp(8px, 2vw, 11px);
+            color: var(--text-muted);
+            pointer-events: none;
+            font-weight: 400;
+        }
+        .pencil {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ============================================================
+           Numpad — 1..9 buttons for touch
+           ============================================================ */
+        .numpad {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            gap: 4px;
+        }
+        .numpad button {
+            padding: 14px 0;
+            font-size: 18px;
+            font-variant-numeric: tabular-nums;
+        }
+        .numpad button[data-done="true"] {
+            opacity: 0.35;
+        }
+
+        /* ============================================================
+           Action bar — undo, erase, pencil, hint
+           ============================================================ */
+        .actions {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        .actions button {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 10px 0;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .actions button svg {
+            width: 22px;
+            height: 22px;
+            stroke: currentColor;
+        }
+        .actions button.active {
+            background: var(--accent);
+            color: white;
+            border-color: transparent;
+        }
+
+        /* ============================================================
+           Status line + footer
+           ============================================================ */
+        .status {
+            font-size: 13px;
+            min-height: 18px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+        .status.error { color: var(--danger); }
+        .status.success { color: var(--success); }
+
+        footer {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            display: flex;
+            gap: 14px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        footer button {
+            padding: 4px 10px;
+            font-size: 12px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        /* ============================================================
+           Completion overlay
+           ============================================================ */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            padding: 20px;
+        }
+        .overlay.show { display: flex; }
+        .card {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 28px;
+            max-width: 320px;
+            width: 100%;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .card h2 { margin: 0; font-size: 22px; font-weight: 500; }
+        .card .stat {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        .card .stat b { color: var(--text); font-weight: 500; }
+    </style>
+</head>
+<body>
+<main>
+    <h1 class="sr-only">Sudoku</h1>
+
+    <div class="top">
+        <div class="timer" id="timer">0:00</div>
+        <select id="difficulty" aria-label="Difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard</option>
+        </select>
+    </div>
+
+    <div class="board" id="board" tabindex="0" aria-label="Sudoku board"></div>
+
+    <div class="status" id="status"></div>
+
+    <div class="numpad" id="numpad"></div>
+
+    <div class="actions">
+        <button id="btn-undo" title="Undo (Ctrl+Z)">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+            <span>Undo</span>
+        </button>
+        <button id="btn-erase" title="Erase (Delete)">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H9L4 15a2 2 0 0 1 0-2.8L13.8 2.4a2 2 0 0 1 2.8 0l5 5a2 2 0 0 1 0 2.8L12 19"/><path d="M15 5l5 5"/></svg>
+            <span>Erase</span>
+        </button>
+        <button id="btn-pencil" title="Pencil (P)">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+            <span>Pencil</span>
+        </button>
+        <button id="btn-hint" title="Hint (H)">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>
+            <span>Hint</span>
+        </button>
+    </div>
+
+    <footer>
+        <button id="btn-new">New game</button>
+        <button id="btn-export">Export history</button>
+        <button id="btn-reset">Reset all</button>
+    </footer>
+</main>
+
+<div class="overlay" id="overlay">
+    <div class="card">
+        <h2>Solved</h2>
+        <div class="stat"><span>Time</span><b id="win-time">—</b></div>
+        <div class="stat"><span>Difficulty</span><b id="win-diff">—</b></div>
+        <div class="stat"><span>Hints used</span><b id="win-hints">—</b></div>
+        <button class="primary" id="btn-play-again">Play again</button>
+    </div>
+</div>
+
+<script>
+    'use strict';
+
+    /* ============================================================
+       1. PERSISTENCE
+       Append-only event log in localStorage. One key, one array.
+       ============================================================ */
+    const EVENTS_KEY = 'sudoku:events:v1';
+
+    function loadEvents() {
+        try {
+            const raw = localStorage.getItem(EVENTS_KEY);
+            return raw ? JSON.parse(raw) : [];
+        } catch (_) {
+            return [];
+        }
+    }
+    function saveEvents(events) {
+        try {
+            localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
+        } catch (_) {
+            // Quota exceeded or private mode. Game continues in memory.
+        }
+    }
+
+    let eventLog = loadEvents();
+
+    function appendEvent(partial) {
+        const event = Object.assign({ seq: eventLog.length, ts: Date.now() }, partial);
+        eventLog.push(event);
+        saveEvents(eventLog);
+        return event;
+    }
+
+    /* ============================================================
+       2. REDUCER
+       Pure fold over the event log. State is always replayable
+       from the log alone.
+
+       Event types:
+         GameStarted    { puzzle, solution, difficulty }
+         CellFilled     { row, col, value }
+         CellCleared    { row, col }
+         PencilToggled  { row, col, value }
+         HintUsed       { row, col }
+         GameCompleted  {}
+         ActionUndone   { refSeq }   // handled by replay-filter
+       ============================================================ */
+    function initialState() {
+        return {
+            currentGame: null,
+            history: [],
+            undoStack: []   // seqs of user actions that are candidates for undo
+        };
+    }
+
+    function cloneGame(g) {
+        if (!g) return null;
+        return {
+            puzzle: g.puzzle.map(r => r.slice()),
+            solution: g.solution.map(r => r.slice()),
+            values: g.values.map(r => r.slice()),
+            pencils: g.pencils.map(r => r.map(p => p.slice())),
+            difficulty: g.difficulty,
+            startedAt: g.startedAt,
+            completedAt: g.completedAt,
+            hintsUsed: g.hintsUsed
+        };
+    }
+
+    function applyEvent(state, event) {
+        const s = {
+            currentGame: cloneGame(state.currentGame),
+            history: state.history.slice(),
+            undoStack: state.undoStack.slice()
+        };
+
+        switch (event.type) {
+            case 'GameStarted': {
+                // Archive the prior game if it was completed.
+                if (s.currentGame && s.currentGame.completedAt) {
+                    s.history.push({
+                        difficulty: s.currentGame.difficulty,
+                        startedAt: s.currentGame.startedAt,
+                        completedAt: s.currentGame.completedAt,
+                        durationMs: s.currentGame.completedAt - s.currentGame.startedAt,
+                        hintsUsed: s.currentGame.hintsUsed
+                    });
+                }
+                s.currentGame = {
+                    puzzle: event.puzzle.map(r => r.slice()),
+                    solution: event.solution.map(r => r.slice()),
+                    values: event.puzzle.map(r => r.slice()),
+                    pencils: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => [])),
+                    difficulty: event.difficulty,
+                    startedAt: event.ts,
+                    completedAt: null,
+                    hintsUsed: 0
+                };
+                s.undoStack = [];
+                break;
+            }
+            case 'CellFilled': {
+                const g = s.currentGame;
+                if (g && !g.puzzle[event.row][event.col]) {
+                    g.values[event.row][event.col] = event.value;
+                    g.pencils[event.row][event.col] = [];
+                    s.undoStack.push(event.seq);
+                }
+                break;
+            }
+            case 'CellCleared': {
+                const g = s.currentGame;
+                if (g && !g.puzzle[event.row][event.col]) {
+                    g.values[event.row][event.col] = 0;
+                    s.undoStack.push(event.seq);
+                }
+                break;
+            }
+            case 'PencilToggled': {
+                const g = s.currentGame;
+                if (g && !g.puzzle[event.row][event.col] && !g.values[event.row][event.col]) {
+                    const marks = g.pencils[event.row][event.col];
+                    const idx = marks.indexOf(event.value);
+                    if (idx >= 0) marks.splice(idx, 1);
+                    else { marks.push(event.value); marks.sort((a, b) => a - b); }
+                    s.undoStack.push(event.seq);
+                }
+                break;
+            }
+            case 'HintUsed': {
+                const g = s.currentGame;
+                if (g && !g.completedAt) {
+                    g.values[event.row][event.col] = g.solution[event.row][event.col];
+                    g.pencils[event.row][event.col] = [];
+                    g.hintsUsed++;
+                    s.undoStack.push(event.seq);
+                }
+                break;
+            }
+            case 'GameCompleted': {
+                if (s.currentGame) s.currentGame.completedAt = event.ts;
+                break;
+            }
+            case 'ActionUndone':
+                // Applied by filter in replay(); nothing to do in the reducer itself.
+                break;
+        }
+        return s;
+    }
+
+    function replay(events) {
+        // Collect all seqs that have been undone, skip them on the main pass.
+        const undoneSeqs = new Set();
+        for (const e of events) {
+            if (e.type === 'ActionUndone') undoneSeqs.add(e.refSeq);
+        }
+        let state = initialState();
+        for (const e of events) {
+            if (e.type === 'ActionUndone') continue;
+            if (undoneSeqs.has(e.seq)) continue;
+            state = applyEvent(state, e);
+        }
+        return state;
+    }
+
+    /* ============================================================
+       3. PUZZLE — solver + generator
+       Backtracking solver with randomized digit order produces a
+       solved board. We then remove cells to reach the target clue
+       count. No uniqueness check in v1 — MVP trade-off.
+       ============================================================ */
+    function shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+        }
+        return arr;
+    }
+
+    function isValidPlacement(board, r, c, v) {
+        for (let i = 0; i < 9; i++) {
+            if (board[r][i] === v) return false;
+            if (board[i][c] === v) return false;
+        }
+        const br = Math.floor(r / 3) * 3;
+        const bc = Math.floor(c / 3) * 3;
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                if (board[br + i][bc + j] === v) return false;
+            }
+        }
+        return true;
+    }
+
+    function fillSolved(board) {
+        for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 9; c++) {
+                if (board[r][c] === 0) {
+                    const opts = shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+                    for (const v of opts) {
+                        if (isValidPlacement(board, r, c, v)) {
+                            board[r][c] = v;
+                            if (fillSolved(board)) return true;
+                            board[r][c] = 0;
+                        }
+                    }
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    function generatePuzzle(difficulty) {
+        const clueCount = ({ easy: 42, medium: 32, hard: 26 })[difficulty] || 40;
+        const solution = Array.from({ length: 9 }, () => Array(9).fill(0));
+        fillSolved(solution);
+        const puzzle = solution.map(r => r.slice());
+        const positions = [];
+        for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) positions.push([r, c]);
+        shuffle(positions);
+        const cellsToRemove = 81 - clueCount;
+        for (let i = 0; i < cellsToRemove; i++) {
+            const [r, c] = positions[i];
+            puzzle[r][c] = 0;
+        }
+        return { puzzle, solution };
+    }
+
+    /* ============================================================
+       4. VALIDATION
+       ============================================================ */
+    function findConflicts(values) {
+        const conflicts = new Set();
+        const check = (cells) => {
+            const byValue = {};
+            for (const [r, c] of cells) {
+                const v = values[r][c];
+                if (v === 0) continue;
+                (byValue[v] = byValue[v] || []).push(r + ',' + c);
+            }
+            for (const v in byValue) {
+                if (byValue[v].length > 1) byValue[v].forEach(k => conflicts.add(k));
+            }
+        };
+        for (let r = 0; r < 9; r++) {
+            const g = []; for (let c = 0; c < 9; c++) g.push([r, c]); check(g);
+        }
+        for (let c = 0; c < 9; c++) {
+            const g = []; for (let r = 0; r < 9; r++) g.push([r, c]); check(g);
+        }
+        for (let br = 0; br < 3; br++) for (let bc = 0; bc < 3; bc++) {
+            const g = [];
+            for (let r = br * 3; r < br * 3 + 3; r++)
+                for (let c = bc * 3; c < bc * 3 + 3; c++) g.push([r, c]);
+            check(g);
+        }
+        return conflicts;
+    }
+
+    function isGameSolved(game) {
+        for (let r = 0; r < 9; r++)
+            for (let c = 0; c < 9; c++)
+                if (game.values[r][c] !== game.solution[r][c]) return false;
+        return true;
+    }
+
+    function remainingForValue(values, v) {
+        let count = 0;
+        for (let r = 0; r < 9; r++)
+            for (let c = 0; c < 9; c++)
+                if (values[r][c] === v) count++;
+        return 9 - count;
+    }
+
+    /* ============================================================
+       5. RUNTIME STATE + DISPATCH
+       ============================================================ */
+    let state = replay(eventLog);
+    let selected = [0, 0];
+    let pencilMode = false;
+    let timerInterval = null;
+
+    const board = document.getElementById('board');
+    const numpad = document.getElementById('numpad');
+    const statusEl = document.getElementById('status');
+    const timerEl = document.getElementById('timer');
+    const overlay = document.getElementById('overlay');
+    const difficultySel = document.getElementById('difficulty');
+
+    function startNewGame(difficulty) {
+        const { puzzle, solution } = generatePuzzle(difficulty);
+        const ev = appendEvent({ type: 'GameStarted', puzzle, solution, difficulty });
+        state = applyEvent(state, ev);
+        // Move selection to first empty cell.
+        outer: for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 9; c++) {
+                if (!state.currentGame.puzzle[r][c]) { selected = [r, c]; break outer; }
+            }
+        }
+        hideOverlay();
+        render();
+        startTimer();
+    }
+
+    function dispatch(eventData) {
+        const ev = appendEvent(eventData);
+        state = applyEvent(state, ev);
+        // Completion check — emitted as its own event so the log stays truthful.
+        const g = state.currentGame;
+        if (g && !g.completedAt && isGameSolved(g)) {
+            const done = appendEvent({ type: 'GameCompleted' });
+            state = applyEvent(state, done);
+            stopTimer();
+            showOverlay();
+        }
+        render();
+    }
+
+    function undo() {
+        const g = state.currentGame;
+        if (!g || g.completedAt) return;
+        const stack = state.undoStack;
+        if (!stack.length) return;
+        const refSeq = stack[stack.length - 1];
+        appendEvent({ type: 'ActionUndone', refSeq });
+        state = replay(eventLog);
+        render();
+    }
+
+    function resetAll() {
+        if (!confirm('Erase all event history? This cannot be undone.')) return;
+        localStorage.removeItem(EVENTS_KEY);
+        eventLog = [];
+        state = initialState();
+        stopTimer();
+        startNewGame(difficultySel.value);
+    }
+
+    function exportHistory() {
+        const blob = new Blob([JSON.stringify(eventLog, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sudoku-history-' + new Date().toISOString().slice(0, 10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    /* ============================================================
+       6. INPUT ACTIONS
+       ============================================================ */
+    function inputNumber(v) {
+        const g = state.currentGame;
+        if (!g || g.completedAt) return;
+        const [r, c] = selected;
+        if (g.puzzle[r][c]) return;   // clue, locked
+        if (pencilMode) {
+            if (g.values[r][c] !== 0) return;
+            dispatch({ type: 'PencilToggled', row: r, col: c, value: v });
+        } else {
+            if (g.values[r][c] === v) {
+                dispatch({ type: 'CellCleared', row: r, col: c });
+            } else {
+                dispatch({ type: 'CellFilled', row: r, col: c, value: v });
+            }
+        }
+    }
+
+    function eraseCell() {
+        const g = state.currentGame;
+        if (!g || g.completedAt) return;
+        const [r, c] = selected;
+        if (g.puzzle[r][c]) return;
+        if (g.values[r][c] !== 0) {
+            dispatch({ type: 'CellCleared', row: r, col: c });
+        } else if (g.pencils[r][c].length) {
+            // Clear all pencil marks — one event per toggle keeps the log truthful.
+            for (const m of g.pencils[r][c].slice()) {
+                dispatch({ type: 'PencilToggled', row: r, col: c, value: m });
+            }
+        }
+    }
+
+    function useHint() {
+        const g = state.currentGame;
+        if (!g || g.completedAt) return;
+        const [r, c] = selected;
+        if (g.puzzle[r][c]) return;
+        if (g.values[r][c] === g.solution[r][c]) return;
+        dispatch({ type: 'HintUsed', row: r, col: c });
+    }
+
+    /* ============================================================
+       7. RENDERING
+       ============================================================ */
+    // Build the 81 cell divs once.
+    for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+            const cell = document.createElement('div');
+            cell.className = 'cell';
+            cell.dataset.row = r;
+            cell.dataset.col = c;
+            board.appendChild(cell);
+        }
+    }
+
+    function render() {
+        const g = state.currentGame;
+        if (!g) return;
+
+        const conflicts = findConflicts(g.values);
+        const [sr, sc] = selected;
+        const selVal = g.values[sr][sc];
+        const sbr = Math.floor(sr / 3);
+        const sbc = Math.floor(sc / 3);
+
+        for (const cell of board.children) {
+            const r = +cell.dataset.row;
+            const c = +cell.dataset.col;
+            const v = g.values[r][c];
+            const isClue = g.puzzle[r][c] !== 0;
+            const isSelected = r === sr && c === sc;
+            const isConflict = conflicts.has(r + ',' + c);
+            const sameRow = r === sr;
+            const sameCol = c === sc;
+            const sameBox = Math.floor(r / 3) === sbr && Math.floor(c / 3) === sbc;
+            const sameValue = selVal > 0 && v === selVal && !isSelected;
+
+            // Rebuild classes from scratch each frame — simpler than diffing.
+            cell.className = 'cell';
+            if (isClue) cell.classList.add('clue');
+            else if (v !== 0) cell.classList.add('user');
+
+            // Priority order: conflict > selected > same-value > related
+            if (isConflict) cell.classList.add('conflict');
+            else if (isSelected) cell.classList.add('selected');
+            else if (sameValue) cell.classList.add('same-value');
+            else if (sameRow || sameCol || sameBox) cell.classList.add('related');
+
+            // Content: value or pencil marks.
+            if (v !== 0) {
+                cell.textContent = v;
+            } else {
+                cell.textContent = '';
+                const marks = g.pencils[r][c];
+                if (marks.length) {
+                    const box = document.createElement('div');
+                    box.className = 'pencils';
+                    for (let n = 1; n <= 9; n++) {
+                        const m = document.createElement('div');
+                        m.className = 'pencil';
+                        m.textContent = marks.includes(n) ? n : '';
+                        box.appendChild(m);
+                    }
+                    cell.appendChild(box);
+                }
+            }
+        }
+
+        renderNumpad();
+
+        document.getElementById('btn-pencil').classList.toggle('active', pencilMode);
+        document.getElementById('btn-undo').disabled = state.undoStack.length === 0 || !!g.completedAt;
+        document.getElementById('btn-hint').disabled = !!g.completedAt;
+
+        if (g.completedAt) {
+            statusEl.textContent = 'Solved';
+            statusEl.className = 'status success';
+        } else if (conflicts.size > 0) {
+            statusEl.textContent = conflicts.size + ' cells in conflict';
+            statusEl.className = 'status error';
+        } else {
+            statusEl.textContent = '';
+            statusEl.className = 'status';
+        }
+    }
+
+    function renderNumpad() {
+        numpad.innerHTML = '';
+        const g = state.currentGame;
+        for (let v = 1; v <= 9; v++) {
+            const btn = document.createElement('button');
+            btn.textContent = v;
+            if (remainingForValue(g.values, v) === 0) btn.dataset.done = 'true';
+            btn.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                inputNumber(v);
+            });
+            numpad.appendChild(btn);
+        }
+    }
+
+    /* ============================================================
+       8. TIMER
+       ============================================================ */
+    function fmt(ms) {
+        const total = Math.max(0, Math.floor(ms / 1000));
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return m + ':' + String(s).padStart(2, '0');
+    }
+    function startTimer() {
+        stopTimer();
+        timerInterval = setInterval(() => {
+            const g = state.currentGame;
+            if (!g) return;
+            const end = g.completedAt || Date.now();
+            timerEl.textContent = fmt(end - g.startedAt);
+        }, 500);
+    }
+    function stopTimer() {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    }
+
+    /* ============================================================
+       9. OVERLAY
+       ============================================================ */
+    function showOverlay() {
+        const g = state.currentGame;
+        if (!g || !g.completedAt) return;
+        document.getElementById('win-time').textContent = fmt(g.completedAt - g.startedAt);
+        document.getElementById('win-diff').textContent = g.difficulty.charAt(0).toUpperCase() + g.difficulty.slice(1);
+        document.getElementById('win-hints').textContent = g.hintsUsed;
+        overlay.classList.add('show');
+    }
+    function hideOverlay() { overlay.classList.remove('show'); }
+
+    /* ============================================================
+       10. EVENT BINDING
+       ============================================================ */
+    board.addEventListener('pointerdown', (e) => {
+        const target = e.target.closest('.cell');
+        if (!target) return;
+        e.preventDefault();
+        selected = [+target.dataset.row, +target.dataset.col];
+        board.focus();
+        render();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        // Don't hijack keys when the user is in the difficulty select.
+        if (e.target === difficultySel) return;
+        const [r, c] = selected;
+        if (e.key >= '1' && e.key <= '9') {
+            inputNumber(+e.key); e.preventDefault();
+        } else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') {
+            eraseCell(); e.preventDefault();
+        } else if (e.key === 'ArrowUp' && r > 0) {
+            selected = [r - 1, c]; render(); e.preventDefault();
+        } else if (e.key === 'ArrowDown' && r < 8) {
+            selected = [r + 1, c]; render(); e.preventDefault();
+        } else if (e.key === 'ArrowLeft' && c > 0) {
+            selected = [r, c - 1]; render(); e.preventDefault();
+        } else if (e.key === 'ArrowRight' && c < 8) {
+            selected = [r, c + 1]; render(); e.preventDefault();
+        } else if (e.key === 'p' || e.key === 'P') {
+            pencilMode = !pencilMode; render();
+        } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+            undo(); e.preventDefault();
+        } else if (e.key === 'h' || e.key === 'H') {
+            useHint();
+        }
+    });
+
+    document.getElementById('btn-undo').addEventListener('click', undo);
+    document.getElementById('btn-erase').addEventListener('click', eraseCell);
+    document.getElementById('btn-pencil').addEventListener('click', () => { pencilMode = !pencilMode; render(); });
+    document.getElementById('btn-hint').addEventListener('click', useHint);
+    document.getElementById('btn-new').addEventListener('click', () => startNewGame(difficultySel.value));
+    document.getElementById('btn-export').addEventListener('click', exportHistory);
+    document.getElementById('btn-reset').addEventListener('click', resetAll);
+    document.getElementById('btn-play-again').addEventListener('click', () => startNewGame(difficultySel.value));
+    difficultySel.addEventListener('change', (e) => startNewGame(e.target.value));
+
+    /* ============================================================
+       11. BOOT
+       ============================================================ */
+    (function boot() {
+        if (!state.currentGame) {
+            startNewGame('easy');
+            return;
+        }
+        difficultySel.value = state.currentGame.difficulty;
+        render();
+        if (state.currentGame.completedAt) {
+            showOverlay();
+        } else {
+            startTimer();
+        }
+    })();
+</script>
+</body>
+</html>
