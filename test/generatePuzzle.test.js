@@ -1,15 +1,16 @@
 'use strict';
 
-const { describe, it, before } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
 describe('generatePuzzle', () => {
+    let dom;
     let generatePuzzle;
 
     before(async () => {
-        const dom = await JSDOM.fromFile(
+        dom = await JSDOM.fromFile(
             path.join(__dirname, '..', 'index.html'),
             { runScripts: 'dangerously', url: 'file:///' }
         );
@@ -19,6 +20,10 @@ describe('generatePuzzle', () => {
         generatePuzzle = dom.window.generatePuzzle;
         assert.equal(typeof generatePuzzle, 'function', 'generatePuzzle not exposed on window');
     });
+
+    // index.html's boot script starts a setInterval timer that would otherwise
+    // keep Node's event loop alive forever. close() cancels it.
+    after(() => dom.window.close());
 
     const countNonZero = (board) => board.flat().filter(v => v !== 0).length;
 
