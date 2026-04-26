@@ -260,6 +260,16 @@
             text-decoration: underline;
             cursor: pointer;
         }
+        /* Build info row — populated by showBuildInfo() from <meta>
+           tags. flex-basis:100% forces it onto its own line below the
+           action buttons in the wrap layout. */
+        .build-info {
+            flex-basis: 100%;
+            margin-top: 4px;
+            font-size: 11px;
+            opacity: 0.6;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
 
         /* ============================================================
            Completion overlay
@@ -339,6 +349,7 @@
         <button id="btn-export">Export history</button>
         <button id="btn-reset">Reset all</button>
         <a href="index.html" download="sudoku.html" title="Save this page to play offline">Download this page</a>
+        <small id="build-info" class="build-info"></small>
     </footer>
 </main>
 
@@ -1088,6 +1099,18 @@
     /* ============================================================
        11. BOOT
        ============================================================ */
+    (function showBuildInfo() {
+        const el = document.getElementById('build-info');
+        const ts = document.querySelector('meta[name="build-timestamp"]').content;
+        const sha = document.querySelector('meta[name="build-commit"]').content;
+        // CI-built artifacts have a 40-char SHA; local/dev builds keep the
+        // literal placeholder text. Don't slice the placeholder — show it
+        // in full so the dev-build signal is unmissable.
+        const shortSha = sha.startsWith('__BUILD_') ? sha : sha.slice(0, 7);
+        el.textContent = `Built ${ts} · ${shortSha}`;
+        el.title = sha;
+    })();
+
     (function boot() {
         if (!state.currentGame) {
             startNewGame('easy');
