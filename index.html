@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Sudoku</title>
     <meta name="description" content="Play sudoku in your browser. No tracking, no ads, no network requests. Works offline.">
+    <!-- Build metadata. CI replaces these placeholder values in
+         .github/workflows/build_and_push.yml before the Docker build.
+         Local/dev builds keep the literal placeholders as a visible
+         signal that the artifact wasn't shipped through CI. -->
+    <meta name="build-timestamp" content="__BUILD_TIMESTAMP__">
+    <meta name="build-commit" content="__BUILD_COMMIT__">
     <style>
         /* ============================================================
            Design tokens — CSS custom properties, light + dark via

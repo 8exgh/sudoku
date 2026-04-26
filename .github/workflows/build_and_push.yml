@@ -36,6 +36,19 @@ jobs:
         id: timestamp
         run: echo "timestamp=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
 
+      - name: Inject build metadata into index.html
+        run: |
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          BUILD_COMMIT="${GITHUB_SHA}"
+          sed -i "s|__BUILD_TIMESTAMP__|${BUILD_TIMESTAMP}|g" index.html
+          sed -i "s|__BUILD_COMMIT__|${BUILD_COMMIT}|g" index.html
+          if grep -q "__BUILD_" index.html; then
+            echo "ERROR: build metadata placeholder(s) still present in index.html" >&2
+            grep -n "__BUILD_" index.html >&2
+            exit 1
+          fi
+          echo "Injected timestamp=${BUILD_TIMESTAMP} commit=${BUILD_COMMIT}"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
