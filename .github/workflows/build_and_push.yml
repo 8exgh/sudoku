@@ -42,9 +42,13 @@ jobs:
           BUILD_COMMIT="${GITHUB_SHA}"
           sed -i "s|__BUILD_TIMESTAMP__|${BUILD_TIMESTAMP}|g" index.html
           sed -i "s|__BUILD_COMMIT__|${BUILD_COMMIT}|g" index.html
-          if grep -q "__BUILD_" index.html; then
+          # Check for the exact sentinels sed should have replaced. Don't
+          # match the prefix __BUILD_ alone — application code legitimately
+          # contains that substring (e.g. the placeholder-detection check
+          # in showBuildInfo).
+          if grep -qE "__BUILD_TIMESTAMP__|__BUILD_COMMIT__" index.html; then
             echo "ERROR: build metadata placeholder(s) still present in index.html" >&2
-            grep -n "__BUILD_" index.html >&2
+            grep -nE "__BUILD_TIMESTAMP__|__BUILD_COMMIT__" index.html >&2
             exit 1
           fi
           echo "Injected timestamp=${BUILD_TIMESTAMP} commit=${BUILD_COMMIT}"
