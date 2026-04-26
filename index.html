@@ -515,8 +515,15 @@
     /* ============================================================
        3. PUZZLE — solver + generator
        Backtracking solver with randomized digit order produces a
-       solved board. We then remove cells to reach the target clue
-       count. No uniqueness check in v1 — MVP trade-off.
+       solved board. We then remove cells one at a time, refusing
+       any removal that would create a second valid solution.
+
+       Difficulty guardrails:
+         - Clue counts are bounded by per-difficulty min/max ranges.
+         - Hard puzzles must require more than naked + hidden singles
+           to solve, so they actually feel hard.
+         - Generation uses bounded retries, then falls back to the
+           best candidate so the user never blocks on generation.
        ============================================================ */
     function shuffle(arr) {
         for (let i = arr.length - 1; i > 0; i--) {
@@ -560,20 +567,168 @@
         return true;
     }
 
-    function generatePuzzle(difficulty) {
-        const clueCount = ({ easy: 42, medium: 32, hard: 26 })[difficulty] || 40;
+    // Counts up to `limit` valid completions of the current board.
+    // CRITICAL: leaves `board` exactly as it was found, even on early exit.
+    function countSolutions(board, limit) {
+        let count = 0;
+        function recurse() {
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    if (board[r][c] === 0) {
+                        for (let v = 1; v <= 9; v++) {
+                            if (isValidPlacement(board, r, c, v)) {
+                                board[r][c] = v;
+                                recurse();
+                                board[r][c] = 0;        // restore on every unwind
+                                if (count >= limit) return;
+                            }
+                        }
+                        return; // no digit fit in this empty cell — dead end
+                    }
+                }
+            }
+            // No empty cells left — a complete solution.
+            count++;
+        }
+        recurse();
+        return count;
+    }
+
+    // Precomputed list of the 27 units (9 rows + 9 cols + 9 boxes) used
+    // by the hidden-singles pass. Built once, reused per call.
+    const ALL_UNITS = (function () {
+        const units = [];
+        for (let r = 0; r < 9; r++) {
+            const u = []; for (let c = 0; c < 9; c++) u.push([r, c]); units.push(u);
+        }
+        for (let c = 0; c < 9; c++) {
+            const u = []; for (let r = 0; r < 9; r++) u.push([r, c]); units.push(u);
+        }
+        for (let br = 0; br < 3; br++) for (let bc = 0; bc < 3; bc++) {
+            const u = [];
+            for (let r = br * 3; r < br * 3 + 3; r++)
+                for (let c = bc * 3; c < bc * 3 + 3; c++) u.push([r, c]);
+            units.push(u);
+        }
+        return units;
+    })();
+
+    // Attempts to solve `board` using only naked singles (a cell with one
+    // legal candidate) and hidden singles (a digit with one legal cell in
+    // a unit). Returns true iff the board ends up fully solved. Used as the
+    // Hard-mode floor: if the puzzle yields to these alone, it is rejected.
+    function canSolveWithBasicTechniques(board) {
+        const work = board.map(r => r.slice());
+        let progress = true;
+        while (progress) {
+            progress = false;
+
+            // Naked singles
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    if (work[r][c] !== 0) continue;
+                    let candidate = 0, count = 0;
+                    for (let v = 1; v <= 9; v++) {
+                        if (isValidPlacement(work, r, c, v)) {
+                            candidate = v;
+                            if (++count > 1) break;
+                        }
+                    }
+                    if (count === 1) {
+                        work[r][c] = candidate;
+                        progress = true;
+                    }
+                }
+            }
+
+            // Hidden singles
+            for (const unit of ALL_UNITS) {
+                for (let v = 1; v <= 9; v++) {
+                    let placed = false;
+                    for (const [r, c] of unit) {
+                        if (work[r][c] === v) { placed = true; break; }
+                    }
+                    if (placed) continue;
+                    let legalR = -1, legalC = -1, legalCount = 0;
+                    for (const [r, c] of unit) {
+                        if (work[r][c] !== 0) continue;
+                        if (isValidPlacement(work, r, c, v)) {
+                            legalR = r; legalC = c;
+                            if (++legalCount > 1) break;
+                        }
+                    }
+                    if (legalCount === 1) {
+                        work[legalR][legalC] = v;
+                        progress = true;
+                    }
+                }
+            }
+        }
+        for (let r = 0; r < 9; r++)
+            for (let c = 0; c < 9; c++)
+                if (work[r][c] === 0) return false;
+        return true;
+    }
+
+    // Per-difficulty targets and acceptance windows. `requireHardFloor` flips
+    // on the basic-techniques rejection.
+    const DIFFICULTY_CONFIG = {
+        easy:   { target: 42, min: 42, max: 48, requireHardFloor: false },
+        medium: { target: 32, min: 32, max: 40, requireHardFloor: false },
+        hard:   { target: 26, min: 26, max: 32, requireHardFloor: true }
+    };
+
+    // One generation attempt: solve a board, then peel off cells in random
+    // order, skipping any removal that would break uniqueness.
+    function generateOneCandidate(cfg) {
         const solution = Array.from({ length: 9 }, () => Array(9).fill(0));
         fillSolved(solution);
         const puzzle = solution.map(r => r.slice());
         const positions = [];
         for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) positions.push([r, c]);
         shuffle(positions);
-        const cellsToRemove = 81 - clueCount;
-        for (let i = 0; i < cellsToRemove; i++) {
-            const [r, c] = positions[i];
+
+        let clueCount = 81;
+        for (const [r, c] of positions) {
+            if (clueCount <= cfg.target) break;
+            const saved = puzzle[r][c];
             puzzle[r][c] = 0;
+            if (countSolutions(puzzle, 2) !== 1) {
+                puzzle[r][c] = saved;     // would create ambiguity — keep clue
+            } else {
+                clueCount--;
+            }
         }
-        return { puzzle, solution };
+        return { puzzle, solution, clueCount };
+    }
+
+    function generatePuzzle(difficulty) {
+        const cfg = DIFFICULTY_CONFIG[difficulty] || DIFFICULTY_CONFIG.easy;
+        const MAX_RETRIES = 12;
+        let fallback = null;
+
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const candidate = generateOneCandidate(cfg);
+            const inRange = candidate.clueCount >= cfg.min && candidate.clueCount <= cfg.max;
+            const passesHard = !cfg.requireHardFloor || !canSolveWithBasicTechniques(candidate.puzzle);
+
+            if (inRange && passesHard) {
+                return { puzzle: candidate.puzzle, solution: candidate.solution };
+            }
+
+            // Track best fallback: prefer Hard-floor pass, then closeness to target.
+            const distance = Math.abs(candidate.clueCount - cfg.target);
+            if (!fallback) {
+                fallback = { candidate, passesHard, distance };
+            } else {
+                const better =
+                    (passesHard && !fallback.passesHard) ||
+                    (passesHard === fallback.passesHard && distance < fallback.distance);
+                if (better) fallback = { candidate, passesHard, distance };
+            }
+        }
+
+        return { puzzle: fallback.candidate.puzzle, solution: fallback.candidate.solution };
     }
 
     /* ============================================================
