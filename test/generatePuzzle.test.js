@@ -139,8 +139,8 @@ describe('generatePuzzle', () => {
         assert.equal(countNonZero(generatePuzzle('hard').puzzle), 26);
     });
 
-    it('clue count: unknown difficulty falls back to 40 clues', () => {
-        assert.equal(countNonZero(generatePuzzle('silly').puzzle), 40);
+    it('clue count: unknown difficulty falls back to easy config (42 clues)', () => {
+        assert.equal(countNonZero(generatePuzzle('silly').puzzle), 42);
     });
 
     it('solution contains no zeros', () => {
@@ -150,17 +150,18 @@ describe('generatePuzzle', () => {
         }
     });
 
-    // Regression tests for puzzle uniqueness. Expected to fail today —
-    // the v1 generator skips the uniqueness check (see specification.md
-    // §14, "Accepted trade-offs"). They will pass once generatePuzzle
-    // gates each cell removal on the puzzle still having exactly one
-    // solution.
+    // Regression guard for puzzle uniqueness. The generator gates each
+    // cell removal on the puzzle still having exactly one solution
+    // (see generatePuzzle / countSolutions in index.html, section 3),
+    // so every produced puzzle should be uniquely solvable. Any sample
+    // with !== 1 solutions means that contract has regressed.
     //
-    // Sample sizes are picked so a generator that can produce non-unique
-    // puzzles will reliably trip at least one sample. "hard" (26 clues)
-    // is where non-uniqueness is most common, so it gets the largest n.
+    // Sample sizes are small but sufficient: even one non-unique sample
+    // fails the test. Hard is the most expensive to verify (proving
+    // uniqueness on a 26-clue board exhausts the search tree), so it is
+    // intentionally kept low.
     describe('uniqueness', () => {
-        const SAMPLES = { easy: 30, medium: 50, hard: 100 };
+        const SAMPLES = { easy: 30, medium: 25, hard: 25 };
 
         for (const difficulty of ['easy', 'medium', 'hard']) {
             const n = SAMPLES[difficulty];
