@@ -1,6 +1,13 @@
 # sudoku
 
-A single-file, zero-dependency sudoku game. The entire app is `index.html` and runs from `file://`.
+A single-file, zero-dependency sudoku game. The entire app is `index.html` and runs from `file://`. Uses event sourced system for game play. Multiple difficulty settings.
+
+## Screenshot
+
+hosted at [game.fusenv.com](https://game.fusenv.com)
+
+<img width="1078" height="1846" alt="image" src="https://github.com/user-attachments/assets/cfc97c51-8a35-49f7-bbc0-25b98b6214b6" />
+
 
 ## Run the app
 
